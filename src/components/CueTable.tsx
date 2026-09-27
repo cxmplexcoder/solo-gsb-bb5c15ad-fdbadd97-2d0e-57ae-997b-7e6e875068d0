@@ -11,18 +11,29 @@ interface CueTableProps {
   onEditText: (id: string, text: string) => void;
   onDelete: (id: string) => void;
   onInsert: (afterId: string | null) => void;
+  onSplit: (id: string) => void;
 }
 
 export default function CueTable(props: CueTableProps) {
-  const { cues, selectedId, playhead, onSelect, onEditTimes, onEditText, onDelete, onInsert } = props;
+  const { cues, selectedId, playhead, onSelect, onEditTimes, onEditText, onDelete, onInsert, onSplit } = props;
 
   return (
     <div className="cue-table">
       <div className="cue-table-head">
         <span>字幕列表（{cues.length}）</span>
-        <button className="btn small" onClick={() => onInsert(null)}>
-          ＋ 新增
-        </button>
+        <div className="cue-table-head-actions">
+          <button
+            className="btn small"
+            disabled={selectedId === null}
+            title={selectedId === null ? '先选中一条字幕' : '按可见字数把选中字幕拆成两条'}
+            onClick={() => selectedId !== null && onSplit(selectedId)}
+          >
+            ✂ 拆分
+          </button>
+          <button className="btn small" onClick={() => onInsert(null)}>
+            ＋ 新增
+          </button>
+        </div>
       </div>
       <div className="cue-rows">
         {cues.length === 0 && <div className="empty-hint">还没有字幕，请导入或粘贴 VTT</div>}
@@ -39,6 +50,7 @@ export default function CueTable(props: CueTableProps) {
               onEditText={(t) => onEditText(cue.id, t)}
               onDelete={() => onDelete(cue.id)}
               onInsertAfter={() => onInsert(cue.id)}
+              onSplit={() => onSplit(cue.id)}
             />
           );
         })}
@@ -56,6 +68,7 @@ function CueRow({
   onEditText,
   onDelete,
   onInsertAfter,
+  onSplit,
 }: {
   cue: Cue;
   active: boolean;
@@ -65,6 +78,7 @@ function CueRow({
   onEditText: (t: string) => void;
   onDelete: () => void;
   onInsertAfter: () => void;
+  onSplit: () => void;
 }) {
   const [startStr, setStartStr] = useState(formatTimestamp(cue.start));
   const [endStr, setEndStr] = useState(formatTimestamp(cue.end));
@@ -127,6 +141,16 @@ function CueRow({
       />
       {error && <div className="cue-row-error">{error}</div>}
       <div className="cue-row-actions">
+        <button
+          className="btn tiny"
+          title="拆分此字幕"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSplit();
+          }}
+        >
+          ✂
+        </button>
         <button
           className="btn tiny"
           title="在其后插入"

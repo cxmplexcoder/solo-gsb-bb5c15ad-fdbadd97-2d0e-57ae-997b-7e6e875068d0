@@ -4,12 +4,14 @@ import CueTable from './components/CueTable';
 import ImportModal from './components/ImportModal';
 import RemapModal from './components/RemapModal';
 import TermModal from './components/TermModal';
+import SplitModal from './components/SplitModal';
 import VideoPlayer from './components/VideoPlayer';
 import { useUndoable } from './hooks/useUndoable';
 import { parseVtt, serializeVtt } from './lib/vtt';
 import { applyEdit } from './lib/engine';
 import { applyRemap, type Anchor } from './lib/remap';
 import { applyTerms, type TermRule } from './lib/terms';
+import { splitCue } from './lib/split';
 import { MIN_DURATION, formatTimestamp } from './lib/time';
 import type { Cue } from './types';
 
@@ -25,6 +27,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(true);
   const [showRemap, setShowRemap] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
+  const [splitId, setSplitId] = useState<string | null>(null);
   const [termRules, setTermRules] = useState<TermRule[]>([
     { id: makeId(), source: '', target: '' },
   ]);
@@ -120,6 +123,7 @@ export default function App() {
     (id: string) => {
       commit((prev) => prev.filter((c) => c.id !== id));
       setSelectedId((sel) => (sel === id ? null : sel));
+      setSplitId((sid) => (sid === id ? null : sid));
     },
     [commit],
   );
@@ -149,6 +153,31 @@ export default function App() {
       if (newId) setSelectedId(newId);
     },
     [commit],
+  );
+
+  // ---------- 拆分 ----------
+  const openSplit = useCallback((id: string) => {
+    setSelectedId(id);
+    setSplitId(id);
+  }, []);
+
+  const applySplit = useCallback(
+    (id: string, n: number) => {
+      // 先基于当前状态算好两段（含新 id），再一次提交 ⇒ 整次拆分只占一条撤销记录
+      const cue = cues.find((c) => c.id === id);
+      if (!cue) return;
+      const parts = splitCue(cue, n, makeId);
+      if (!parts) return;
+      commit((prev) => {
+        const idx = prev.findIndex((c) => c.id === id);
+        if (idx < 0) return prev;
+        return [...prev.slice(0, idx), parts[0], parts[1], ...prev.slice(idx + 1)];
+      });
+      setSplitId(null);
+      setSelectedId(parts[0].id);
+      flash('已拆分为两条字幕');
+    },
+    [cues, commit, flash],
   );
 
   // ---------- 视频 ----------
@@ -330,6 +359,7 @@ export default function App() {
             onEditText={editText}
             onDelete={deleteCue}
             onInsert={insertCue}
+            onSplit={openSplit}
           />
         </aside>
       </main>
@@ -356,6 +386,13 @@ export default function App() {
           onApply={applyTerminology}
         />
       )}
+      {splitId !== null &&
+        (() => {
+          const cue = cues.find((c) => c.id === splitId);
+          return cue ? (
+            <SplitModal cue={cue} onClose={() => setSplitId(null)} onApply={applySplit} />
+          ) : null;
+        })()}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

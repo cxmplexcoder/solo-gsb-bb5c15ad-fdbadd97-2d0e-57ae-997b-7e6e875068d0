@@ -12,6 +12,7 @@ import {
   applyTerms,
   type TermRule,
 } from '../src/lib/terms';
+import { analyzeCueText, previewSplit, splitCue } from '../src/lib/split';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -595,6 +596,173 @@ cue-2
   assert.equal(reparsed[0].id, 'cue-1');
   assert.equal(reparsed[0].text, '<b>账号</b> 与 &amp; 实体');
   assert(Math.abs(reparsed[0].start - 1) < 1e-9);
+});
+
+// ---------- 字幕拆分 ----------
+test('拆分计数：码点、换行、实体各计 1，标签不计', () => {
+  // 纯文本按码点计（代理对只算 1 字）
+  const a1 = analyzeCueText('ab👋c');
+  assert(a1.ok && a1.total === 4);
+  // 换行计 1 字
+  const a2 = analyzeCueText('ab\ncd');
+  assert(a2.ok && a2.total === 5);
+  // 命名/十进制/十六进制实体各计 1
+  const a3 = analyzeCueText('a&amp;b&#65;c&#x41;');
+  assert(a3.ok && a3.total === 6);
+  // 标签不计字数
+  const a4 = analyzeCueText('<b>hello</b> <i class="x">w</i>');
+  assert(a4.ok && a4.total === 7);
+  // 空文本 / 只有标签
+  const a5 = analyzeCueText('');
+  assert(a5.ok && a5.total === 0);
+  const a6 = analyzeCueText('<b></b>');
+  assert(a6.ok && a6.total === 0);
+});
+
+test('拆分校验：未知/不配对/未闭合标签与内联时间戳均报错', () => {
+  assert(!analyzeCueText('<ruby>字</ruby>').ok); // 未知标签
+  assert(!analyzeCueText('<foo>x</foo>').ok); // 未知标签
+  assert(!analyzeCueText('a</b>').ok); // 闭标签无对应开标签
+  assert(!analyzeCueText('<b>abc').ok); // 未闭合
+  assert(!analyzeCueText('<b><i>x</b></i>').ok); // 嵌套错误
+  assert(!analyzeCueText('a<00:00:01.000>b').ok); // 内联时间戳
+  assert(!analyzeCueText('a<1:02.500>b').ok); // 内联时间戳（短格式）
+  // 合法的 b/i/u/c/v/lang（含 class 与注解）
+  const ok = analyzeCueText('<b>a</b><i>b</i><u>c</u><c.foo>d</c><v 甲>e</v><lang en>f</lang>');
+  assert(ok.ok && ok.total === 6);
+  // 大小写不敏感
+  const upper = analyzeCueText('<B>a</B>');
+  assert(upper.ok && upper.total === 1);
+});
+
+test('拆分预览：纯文本两段正文与时间正确，时间四舍五入到毫秒', () => {
+  const cue: Cue = { id: 'c1', start: 1, end: 4, text: 'abcdef' }; // 6 字 / 3s
+  const r = previewSplit(cue, 2);
+  assert(r.ok);
+  assert.equal(r.preview.leftText, 'ab');
+  assert.equal(r.preview.rightText, 'cdef');
+  assert.equal(r.preview.total, 6);
+  assert.equal(r.preview.leftCount, 2);
+  assert.equal(r.preview.rightCount, 4);
+  // 分割时间 = 1 + 3 × 2/6 = 2
+  assert.equal(r.preview.splitTime, 2);
+  assert.equal(r.preview.leftStart, 1);
+  assert.equal(r.preview.leftEnd, 2);
+  assert.equal(r.preview.rightStart, 2);
+  assert.equal(r.preview.rightEnd, 4);
+  // 毫秒四舍五入：7 字 / 2s，N=2 → 1 + 4/7 ≈ 1.571428 → 1.571
+  const cue2: Cue = { id: 'c2', start: 1, end: 3, text: 'abcdefg' };
+  const r2 = previewSplit(cue2, 2);
+  assert(r2.ok);
+  assert.equal(r2.preview.splitTime, 1.571);
+});
+
+test('拆分预览：切点处标签按嵌套逆序闭合左段、原样重开右段', () => {
+  const cue: Cue = { id: 'c1', start: 0, end: 6, text: '<b>x<i>ab</i>y</b>z' }; // 可见 x a b y z
+  const r = previewSplit(cue, 2); // 切在 a 之后，<b> 与 <i> 均开放
+  assert(r.ok);
+  assert.equal(r.preview.leftText, '<b>x<i>a</i></b>');
+  assert.equal(r.preview.rightText, '<b><i>b</i>y</b>z');
+});
+
+test('拆分预览：紧跟切点的闭合标签并入左段，不产生空标签对', () => {
+  const cue: Cue = { id: 'c1', start: 0, end: 5, text: '<i>ab</i>cd' };
+  const r = previewSplit(cue, 2);
+  assert(r.ok);
+  assert.equal(r.preview.leftText, '<i>ab</i>');
+  assert.equal(r.preview.rightText, 'cd');
+  // 多层嵌套同样吸收
+  const cue2: Cue = { id: 'c2', start: 0, end: 5, text: '<b><i>ab</i></b>cd' };
+  const r2 = previewSplit(cue2, 2);
+  assert(r2.ok);
+  assert.equal(r2.preview.leftText, '<b><i>ab</i></b>');
+  assert.equal(r2.preview.rightText, 'cd');
+  // 大小写混合：自动闭合/重开保留开标签原文；</I> 紧跟切点被左段吸收，右段只重开 <B>
+  const cue3: Cue = { id: 'c3', start: 0, end: 5, text: '<B>a<I>b</I>c</B>d' };
+  const r3 = previewSplit(cue3, 2);
+  assert(r3.ok);
+  assert.equal(r3.preview.leftText, '<B>a<I>b</I></B>');
+  assert.equal(r3.preview.rightText, '<B>c</B>d');
+});
+
+test('拆分预览：实体与换行参与计数且原样保留', () => {
+  const cue: Cue = { id: 'c1', start: 0, end: 5, text: 'a&amp;b\nc&#65;d' }; // 可见 7 字
+  const r = previewSplit(cue, 2); // 切在 &amp; 之后
+  assert(r.ok);
+  assert.equal(r.preview.leftText, 'a&amp;');
+  assert.equal(r.preview.rightText, 'b\nc&#65;d');
+  const r2 = previewSplit(cue, 4); // 切在换行之后
+  assert(r2.ok);
+  assert.equal(r2.preview.leftText, 'a&amp;b\n');
+  assert.equal(r2.preview.rightText, 'c&#65;d');
+});
+
+test('拆分预览：切点须为整数且两段非空', () => {
+  const cue: Cue = { id: 'c1', start: 0, end: 5, text: 'abcdef' };
+  assert(!previewSplit(cue, 0).ok); // 左段空
+  assert(!previewSplit(cue, 6).ok); // 右段空
+  assert(!previewSplit(cue, 2.5).ok); // 非整数
+  assert(!previewSplit(cue, -1).ok);
+  assert(!previewSplit(cue, NaN).ok);
+  // 可见字数不足 2
+  assert(!previewSplit({ id: 'c2', start: 0, end: 5, text: '<b>a</b>' }, 1).ok);
+  assert(!previewSplit({ id: 'c3', start: 0, end: 5, text: '' }, 1).ok);
+});
+
+test('拆分预览：任一段不足 300ms 禁止应用', () => {
+  // 10 字 / 1s：N=3 → 左段恰 300ms 允许；N=2 → 200ms 禁止
+  const cue: Cue = { id: 'c1', start: 0, end: 1, text: '0123456789' };
+  assert(previewSplit(cue, 3).ok);
+  assert(!previewSplit(cue, 2).ok);
+  // 右段不足 300ms：N=8 → 右段 200ms
+  assert(!previewSplit(cue, 8).ok);
+  assert(previewSplit(cue, 7).ok);
+});
+
+test('拆分应用：两条新 id 字幕替换原条，首尾相接保留原起止', () => {
+  const cue: Cue = { id: 'orig', start: 1.5, end: 4.5, text: '<b>hello</b> world', note: 'n' };
+  let seq = 0;
+  const parts = splitCue(cue, 5, () => `new-${++seq}`);
+  assert(parts !== null);
+  assert.equal(parts.length, 2);
+  // 新 id 且互不相同、不等于原 id
+  assert.equal(parts[0].id, 'new-1');
+  assert.equal(parts[1].id, 'new-2');
+  // 首尾相接、保留原起止
+  assert.equal(parts[0].start, 1.5);
+  assert.equal(parts[0].end, parts[1].start);
+  assert.equal(parts[1].end, 4.5);
+  // 文本正确拆分（标签闭合/重开）
+  assert.equal(parts[0].text, '<b>hello</b>');
+  assert.equal(parts[1].text, ' world');
+  // 其余字段保留
+  assert.equal(parts[0].note, 'n');
+  assert.equal(parts[1].note, 'n');
+  // 非法切点返回 null
+  assert.equal(splitCue(cue, 0, () => 'x'), null);
+  assert.equal(splitCue({ id: 'c', start: 0, end: 1, text: 'a<foo>b' }, 1, () => 'x'), null);
+});
+
+test('拆分结果满足不变量且可序列化往返', () => {
+  const cues: Cue[] = [
+    { id: 'c1', start: 0.5, end: 2, text: '前一条' },
+    { id: 'c2', start: 2, end: 6, text: '<v 甲>第一行\n第二行</v> 尾' },
+    { id: 'c3', start: 6.5, end: 8, text: '后一条' },
+  ];
+  const parts = splitCue(cues[1], 4, () => `p${Math.random()}`);
+  assert(parts !== null);
+  const next = [cues[0], ...parts, cues[2]];
+  expectValid(next);
+  // 相邻关系：左段接前一条，右段接后一条
+  assert(next[0].end <= next[1].start + 1e-9);
+  assert(next[2].end <= next[3].start + 1e-9);
+  // 序列化往返保持拆分结果
+  const reparsed = parseVtt(serializeVtt(next));
+  assert.equal(reparsed.length, 4);
+  assert.equal(reparsed[1].text, parts[0].text);
+  assert.equal(reparsed[2].text, parts[1].text);
+  assert(Math.abs(reparsed[1].end - parts[0].end) < 1e-3);
+  assert(Math.abs(reparsed[2].start - parts[1].start) < 1e-3);
 });
 
 console.log(`\n全部 ${passed} 个测试通过 ✅`);

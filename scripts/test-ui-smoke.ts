@@ -2,12 +2,17 @@ import assert from 'node:assert';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import TermModal from '../src/components/TermModal';
+import SplitModal from '../src/components/SplitModal';
 import type { Cue } from '../src/types';
 import type { TermRule } from '../src/lib/terms';
 
 /** SSR 输出中 React 会在插值处插入 <!-- -->，先归一化再断言 */
-function render(props: Parameters<typeof TermModal>[0]): string {
+function renderTerm(props: Parameters<typeof TermModal>[0]): string {
   return renderToString(React.createElement(TermModal, props)).replace(/<!-- -->/g, '');
+}
+
+function renderSplit(props: Parameters<typeof SplitModal>[0]): string {
+  return renderToString(React.createElement(SplitModal, props)).replace(/<!-- -->/g, '');
 }
 
 const noop = () => {};
@@ -24,7 +29,7 @@ const rules: TermRule[] = [
 ];
 
 // 正常预览渲染：c1 命中 2 处（帐号、hello），c3 命中 3 处（hello×2、帐号）
-const html = render({ cues, rules, onRulesChange: noop, onClose: noop, onApply: noop });
+const html = renderTerm({ cues, rules, onRulesChange: noop, onClose: noop, onApply: noop });
 assert(html.includes('术语审校'), '标题缺失');
 assert(html.includes('应用替换（2）'), '应默认勾选 2 条命中字幕');
 assert(html.includes('帐号→账号'), '命中标签缺失');
@@ -33,7 +38,7 @@ assert(html.includes('&lt;b&gt;'), '标签应按原样转义显示');
 assert(html.includes('预览：2 条字幕共 5 处命中，已勾选 2 条。'), '汇总缺失');
 
 // 非法规则（重复原词）→ 显示错误、禁止应用
-const bad = render({
+const bad = renderTerm({
   cues,
   rules: [
     { id: 'r1', source: 'a', target: 'x' },
@@ -47,7 +52,7 @@ assert(bad.includes('原词重复'), '重复校验缺失');
 assert(bad.includes('应用替换（0）'), '无预览时应用数应为 0');
 
 // 空规则 → 提示语
-const empty = render({
+const empty = renderTerm({
   cues,
   rules: [{ id: 'r1', source: '', target: '' }],
   onRulesChange: noop,
@@ -55,5 +60,34 @@ const empty = render({
   onApply: noop,
 });
 assert(empty.includes('请先填写至少一条完整规则'), '空规则提示缺失');
+
+// ---------- 拆分弹窗 ----------
+// 正常渲染：显示原文、可见字数与时间范围；未输入切点时不显示预览、应用按钮禁用
+const splitOk = renderSplit({
+  cue: { id: 's1', start: 1, end: 4, text: '<b>hello</b> world' },
+  onClose: noop,
+  onApply: noop,
+});
+assert(splitOk.includes('拆分字幕'), '拆分标题缺失');
+assert(splitOk.includes('可见 11 字'), '可见字数缺失');
+assert(splitOk.includes('00:00:01.000') && splitOk.includes('00:00:04.000'), '时间范围缺失');
+assert(splitOk.includes('切点 N'), '切点输入缺失');
+assert(!splitOk.includes('split-preview'), '未输入切点不应显示预览');
+
+// 标签非法（内联时间戳）→ 显示错误且输入框禁用
+const splitBad = renderSplit({
+  cue: { id: 's2', start: 0, end: 2, text: 'a<00:00:01.000>b' },
+  onClose: noop,
+  onApply: noop,
+});
+assert(splitBad.includes('内联时间戳'), '内联时间戳错误缺失');
+
+// 标签不配对 → 显示错误
+const splitUnpaired = renderSplit({
+  cue: { id: 's3', start: 0, end: 2, text: '<b>abc' },
+  onClose: noop,
+  onApply: noop,
+});
+assert(splitUnpaired.includes('标签未闭合'), '未闭合错误缺失');
 
 console.log('UI 冒烟测试通过 ✅');

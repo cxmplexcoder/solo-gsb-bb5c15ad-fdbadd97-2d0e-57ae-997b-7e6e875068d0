@@ -468,6 +468,11 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+.cue-table-head-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .cue-rows {
   flex: 1;
   overflow-y: auto;
@@ -917,6 +922,116 @@ body {
 .term-text mark.mark-new {
   background: rgba(52, 211, 153, 0.22);
   border-bottom: 1px solid var(--green);
+}
+
+/* ---------- 字幕拆分 ---------- */
+.split-source {
+  margin: 10px 18px 0;
+}
+
+.split-source-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+.split-source-head .col-label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.split-text {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.split-input-row {
+  margin: 12px 18px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.split-input-row label {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.split-input-row input {
+  width: 120px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 9px;
+}
+
+.split-input-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.split-preview {
+  margin: 12px 18px 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 700px) {
+  .split-preview {
+    grid-template-columns: 1fr;
+  }
+}
+
+.split-seg {
+  min-width: 0;
+}
+
+.split-seg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+}
+
+.split-seg-head .dim,
+.split-source-head .dim {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.split-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.split-badge.left {
+  background: rgba(79, 140, 255, 0.14);
+  border: 1px solid rgba(79, 140, 255, 0.5);
+  color: #a8c4ff;
+}
+
+.split-badge.right {
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.5);
+  color: #7fe6c0;
 }
 
 /* ---------- Toast ---------- */
