@@ -2,6 +2,8 @@ import assert from 'node:assert';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import TermModal from '../src/components/TermModal';
+import SplitModal from '../src/components/SplitModal';
+import CueTable from '../src/components/CueTable';
 import type { Cue } from '../src/types';
 import type { TermRule } from '../src/lib/terms';
 
@@ -55,5 +57,46 @@ const empty = render({
   onApply: noop,
 });
 assert(empty.includes('请先填写至少一条完整规则'), '空规则提示缺失');
+
+// ---------- 字幕拆分 ----------
+const renderSplit = (cue: Cue): string =>
+  renderToString(React.createElement(SplitModal, { cue, onClose: noop, onApply: noop })).replace(
+    /<!-- -->/g,
+    '',
+  );
+
+// 正常渲染：显示原字幕时间、可见字数（标签不计）与切点输入
+const splitHtml = renderSplit({ id: 's1', start: 1, end: 3, text: '<b>hello</b> world' });
+assert(splitHtml.includes('拆分字幕'), '拆分弹窗标题缺失');
+assert(splitHtml.includes('可见 11 字'), '可见字数缺失'); // "hello world" = 11 字
+assert(splitHtml.includes('切点 N'), '切点输入缺失');
+assert(splitHtml.includes('应用拆分'), '应用按钮缺失');
+assert(splitHtml.includes('disabled'), '未输入切点时应用按钮应禁用');
+
+// 未知标签：立即报错并禁止应用
+const badTag = renderSplit({ id: 's2', start: 0, end: 2, text: 'a<font>b</font>' });
+assert(badTag.includes('不支持的标签'), '未知标签报错缺失');
+assert(badTag.includes('disabled'), '标签错误时应用按钮应禁用');
+
+// 内联时间戳：立即报错
+const inlineTs = renderSplit({ id: 's3', start: 0, end: 2, text: 'a<00:00:01.000>b' });
+assert(inlineTs.includes('内联时间戳'), '内联时间戳报错缺失');
+
+// 字幕列表行内有拆分入口（✂）
+const tableHtml = renderToString(
+  React.createElement(CueTable, {
+    cues,
+    selectedId: null,
+    playhead: 0,
+    onSelect: noop,
+    onEditTimes: noop,
+    onEditText: noop,
+    onDelete: noop,
+    onInsert: noop,
+    onSplit: noop,
+  }),
+).replace(/<!-- -->/g, '');
+assert(tableHtml.includes('✂'), '字幕列表拆分入口缺失');
+assert(tableHtml.includes('按切点拆分为两段'), '拆分入口提示缺失');
 
 console.log('UI 冒烟测试通过 ✅');

@@ -4,12 +4,14 @@ import CueTable from './components/CueTable';
 import ImportModal from './components/ImportModal';
 import RemapModal from './components/RemapModal';
 import TermModal from './components/TermModal';
+import SplitModal from './components/SplitModal';
 import VideoPlayer from './components/VideoPlayer';
 import { useUndoable } from './hooks/useUndoable';
 import { parseVtt, serializeVtt } from './lib/vtt';
 import { applyEdit } from './lib/engine';
 import { applyRemap, type Anchor } from './lib/remap';
 import { applyTerms, type TermRule } from './lib/terms';
+import { applySplit } from './lib/split';
 import { MIN_DURATION, formatTimestamp } from './lib/time';
 import type { Cue } from './types';
 
@@ -25,6 +27,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(true);
   const [showRemap, setShowRemap] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
+  const [splitId, setSplitId] = useState<string | null>(null);
   const [termRules, setTermRules] = useState<TermRule[]>([
     { id: makeId(), source: '', target: '' },
   ]);
@@ -209,6 +212,31 @@ export default function App() {
     [commit, flash],
   );
 
+  // ---------- 字幕拆分 ----------
+  const splitTarget = splitId ? cues.find((c) => c.id === splitId) ?? null : null;
+
+  const openSplit = useCallback((id: string) => {
+    setSelectedId(id);
+    setSplitId(id);
+  }, []);
+
+  const applySplitCue = useCallback(
+    (id: string, n: number) => {
+      // 用两条新 id 的字幕替换原条（其他字幕不变），一次提交只产生一条撤销记录
+      const next = applySplit(cues, id, n);
+      if (next === cues) {
+        flash('拆分失败，请检查切点与标签');
+        return;
+      }
+      const idx = cues.findIndex((c) => c.id === id);
+      commit(next);
+      setSelectedId(next[idx].id);
+      setSplitId(null);
+      flash('已拆分为 2 条字幕');
+    },
+    [cues, commit, flash],
+  );
+
   // ---------- 导出 ----------
   const exportVtt = useCallback(() => {
     const content = serializeVtt(cues);
@@ -330,6 +358,7 @@ export default function App() {
             onEditText={editText}
             onDelete={deleteCue}
             onInsert={insertCue}
+            onSplit={openSplit}
           />
         </aside>
       </main>
@@ -354,6 +383,13 @@ export default function App() {
           onRulesChange={setTermRules}
           onClose={() => setShowTerms(false)}
           onApply={applyTerminology}
+        />
+      )}
+      {splitTarget && (
+        <SplitModal
+          cue={splitTarget}
+          onClose={() => setSplitId(null)}
+          onApply={applySplitCue}
         />
       )}
       {toast && <div className="toast">{toast}</div>}

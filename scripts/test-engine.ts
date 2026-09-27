@@ -12,6 +12,12 @@ import {
   applyTerms,
   type TermRule,
 } from '../src/lib/terms';
+import {
+  tokenizeCueText,
+  countTokens,
+  previewSplit,
+  applySplit,
+} from '../src/lib/split';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -595,6 +601,182 @@ cue-2
   assert.equal(reparsed[0].id, 'cue-1');
   assert.equal(reparsed[0].text, '<b>账号</b> 与 &amp; 实体');
   assert(Math.abs(reparsed[0].start - 1) < 1e-9);
+});
+
+// ---------- 字幕拆分 ----------
+function visibleCount(text: string): number {
+  const r = tokenizeCueText(text);
+  assert(r.ok, `tokenize failed: ${text}`);
+  return countTokens(r.tokens);
+}
+
+test('拆分计数：标签不计、实体各计一字、换行计一字、按 Unicode 码点计', () => {
+  assert.equal(visibleCount('hello'), 5);
+  assert.equal(visibleCount('<b>hello</b>'), 5); // 标签不计
+  assert.equal(visibleCount('<c.foo><v 说话人>ab</v></c>'), 2); // 类名/注解不计
+  assert.equal(visibleCount('a&amp;b&#65;c&#x41;d'), 7); // 4 字母 + 命名/数字实体各计 1
+  assert.equal(visibleCount('ab\ncd'), 5); // 换行计 1 字
+  assert.equal(visibleCount('a👋b'), 3); // 按码点计（代理对算 1 字）
+  assert.equal(visibleCount('a & b'), 5); // 裸露的 & 是普通可见字符
+});
+
+test('拆分文本：切点处按嵌套顺序闭合左段、原样重开右段', () => {
+  const cue: Cue = { id: 's', start: 0, end: 5, text: '<b>abc</b>def' };
+  const r = previewSplit(cue, 2);
+  assert(r.ok);
+  assert.equal(r.preview.leftText, '<b>ab</b>');
+  assert.equal(r.preview.rightText, '<b>c</b>def');
+  // 嵌套标签：左段按嵌套逆序闭合，右段按原顺序重开
+  const nested = previewSplit({ ...cue, text: '<b><i>ab</i></b>' }, 1);
+  assert(nested.ok);
+  assert.equal(nested.preview.leftText, '<b><i>a</i></b>');
+  assert.equal(nested.preview.rightText, '<b><i>b</i></b>');
+  // 带类名与注解的开标签原样重开
+  const anno = previewSplit({ ...cue, text: '<c.foo><v 张三>abcd</v></c>' }, 2);
+  assert(anno.ok);
+  assert.equal(anno.preview.leftText, '<c.foo><v 张三>ab</v></c>');
+  assert.equal(anno.preview.rightText, '<c.foo><v 张三>cd</v></c>');
+  // 切点落在标签边界：闭合标签归入左段，不产生空标签对
+  const edge = previewSplit({ ...cue, text: '<b>ab</b>cd' }, 2);
+  assert(edge.ok);
+  assert.equal(edge.preview.leftText, '<b>ab</b>');
+  assert.equal(edge.preview.rightText, 'cd');
+  // 切点右侧的开标签留在右段
+  const open = previewSplit({ ...cue, text: 'ab<b>cd</b>' }, 2);
+  assert(open.ok);
+  assert.equal(open.preview.leftText, 'ab');
+  assert.equal(open.preview.rightText, '<b>cd</b>');
+});
+
+test('拆分文本：实体保持原样且不可拆散，换行可切', () => {
+  const cue: Cue = { id: 's', start: 0, end: 3, text: 'a&amp;b' };
+  const r1 = previewSplit(cue, 1);
+  assert(r1.ok);
+  assert.equal(r1.preview.leftText, 'a');
+  assert.equal(r1.preview.rightText, '&amp;b');
+  const r2 = previewSplit(cue, 2);
+  assert(r2.ok);
+  assert.equal(r2.preview.leftText, 'a&amp;');
+  assert.equal(r2.preview.rightText, 'b');
+  // 换行计 1 字，可切在其前后
+  const nl = previewSplit({ ...cue, text: 'ab\ncd' }, 3);
+  assert(nl.ok);
+  assert.equal(nl.preview.leftText, 'ab\n');
+  assert.equal(nl.preview.rightText, 'cd');
+  // 代理对不可拆散：切点 1 落在 emoji 前
+  const emoji = previewSplit({ ...cue, text: 'a👋b' }, 1);
+  assert(emoji.ok);
+  assert.equal(emoji.preview.leftText, 'a');
+  assert.equal(emoji.preview.rightText, '👋b');
+});
+
+test('拆分校验：未知/不配对标签与内联时间戳报错并禁止应用', () => {
+  const cue: Cue = { id: 's', start: 0, end: 5, text: '' };
+  const bad = [
+    'a<ruby>b</ruby>c', // 未知标签
+    '<b>abc', // 未闭合
+    'ab</i>c', // 无对应开标签
+    '<b><i>ab</b></i>', // 嵌套交错
+    'a<00:00:01.000>b', // 内联时间戳
+    'a<b', // 不完整标签
+    'ab</b x>c', // 闭合标签带注解
+  ];
+  for (const text of bad) {
+    const r = previewSplit({ ...cue, text }, 1);
+    assert(!r.ok, `应当报错：${text}`);
+    // 校验失败时 applySplit 原样返回（不产生撤销记录）
+    const cues: Cue[] = [{ ...cue, text }];
+    assert.equal(applySplit(cues, 's', 1), cues);
+  }
+  // 错误信息包含问题标签
+  const r = previewSplit({ ...cue, text: 'x<font>y</font>' }, 1);
+  assert(!r.ok && r.error.includes('<font>'));
+  const ts = previewSplit({ ...cue, text: 'a<00:00:01.000>b' }, 1);
+  assert(!ts.ok && ts.error.includes('内联时间戳'));
+});
+
+test('拆分校验：N 须为整数且两段非空', () => {
+  const cue: Cue = { id: 's', start: 0, end: 5, text: 'abcd' };
+  assert(!previewSplit(cue, 0).ok);
+  assert(!previewSplit(cue, 4).ok); // 右段为空
+  assert(!previewSplit(cue, 1.5).ok); // 非整数
+  assert(!previewSplit(cue, -1).ok);
+  assert(!previewSplit(cue, NaN).ok);
+  assert(previewSplit(cue, 1).ok);
+  assert(previewSplit(cue, 3).ok);
+  // 可见文本不足 2 字
+  assert(!previewSplit({ ...cue, text: '<b>a</b>' }, 1).ok);
+  assert(!previewSplit({ ...cue, text: '' }, 1).ok);
+});
+
+test('拆分时间：原起点 + 原时长 × N / 总字数，四舍五入到毫秒，两段相接保留原起止', () => {
+  const cue: Cue = { id: 's', start: 1, end: 3, text: 'abcd' };
+  const r = previewSplit(cue, 1);
+  assert(r.ok);
+  assert.equal(r.preview.splitTime, 1.5); // 1 + 2 × 1/4
+  assert.equal(r.preview.leftStart, 1);
+  assert.equal(r.preview.leftEnd, 1.5);
+  assert.equal(r.preview.rightStart, 1.5);
+  assert.equal(r.preview.rightEnd, 3);
+  // 毫秒四舍五入：1/3 s → 0.333，2/3 s → 0.667
+  const r2 = previewSplit({ id: 's', start: 0, end: 1, text: 'abc' }, 1);
+  assert(r2.ok);
+  assert.equal(r2.preview.splitTime, 0.333);
+  const r3 = previewSplit({ id: 's', start: 0, end: 1, text: 'abc' }, 2);
+  assert(r3.ok);
+  assert.equal(r3.preview.splitTime, 0.667);
+});
+
+test('拆分时间：任一段不足 300ms 禁止应用', () => {
+  // 0.5s 拆两半 → 各 250ms
+  assert(!previewSplit({ id: 's', start: 0, end: 0.5, text: 'ab' }, 1).ok);
+  // 右段不足（590ms 拆半 → 295ms）
+  assert(!previewSplit({ id: 's', start: 0, end: 0.59, text: 'ab' }, 1).ok);
+  // 恰好 300ms + 300ms → 允许
+  assert(previewSplit({ id: 's', start: 0, end: 0.6, text: 'ab' }, 1).ok);
+  // 比例切分导致一侧不足也禁止
+  assert(!previewSplit({ id: 's', start: 0, end: 1, text: 'abcdef' }, 1).ok);
+});
+
+test('拆分应用：两条新 id 字幕替换原条，其他字幕不变', () => {
+  const cues: Cue[] = [
+    { id: 'a', start: 0, end: 1, text: 'left' },
+    { id: 'b', start: 2, end: 4, text: '<b>abcd</b>' },
+    { id: 'c', start: 5, end: 6, text: 'right' },
+  ];
+  const next = applySplit(cues, 'b', 2);
+  assert.equal(next.length, 4);
+  // 其他字幕保持原引用（最小化 diff）
+  assert.equal(next[0], cues[0]);
+  assert.equal(next[3], cues[2]);
+  // 新 id 互不相同且不同于原 id
+  const [l, r] = [next[1], next[2]];
+  assert(l.id !== 'b' && r.id !== 'b' && l.id !== r.id);
+  // 时间相接、保留原起止
+  assert.equal(l.start, 2);
+  assert.equal(l.end, 3);
+  assert.equal(r.start, 3);
+  assert.equal(r.end, 4);
+  assert.equal(l.text, '<b>ab</b>');
+  assert.equal(r.text, '<b>cd</b>');
+  // 原数组未被修改，结果满足不变量
+  assert.equal(cues.length, 3);
+  expectValid(next);
+  // 找不到目标时原样返回
+  assert.equal(applySplit(cues, 'nope', 1), cues);
+});
+
+test('拆分结果可序列化往返，导出反映拆分', () => {
+  const cues: Cue[] = [{ id: 's', start: 1, end: 3, text: '<i>a&amp;b</i>cd' }];
+  const next = applySplit(cues, 's', 2);
+  const text = serializeVtt(next);
+  const reparsed = parseVtt(text);
+  assert.equal(reparsed.length, 2);
+  assert.equal(reparsed[0].text, '<i>a&amp;</i>');
+  assert.equal(reparsed[1].text, '<i>b</i>cd');
+  assert(Math.abs(reparsed[0].start - 1) < 1e-9);
+  assert(Math.abs(reparsed[0].end - reparsed[1].start) < 1e-9);
+  assert(Math.abs(reparsed[1].end - 3) < 1e-9);
 });
 
 console.log(`\n全部 ${passed} 个测试通过 ✅`);

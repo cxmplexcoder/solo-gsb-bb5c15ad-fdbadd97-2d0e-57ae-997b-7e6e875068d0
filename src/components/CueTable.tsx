@@ -11,10 +11,11 @@ interface CueTableProps {
   onEditText: (id: string, text: string) => void;
   onDelete: (id: string) => void;
   onInsert: (afterId: string | null) => void;
+  onSplit: (id: string) => void;
 }
 
 export default function CueTable(props: CueTableProps) {
-  const { cues, selectedId, playhead, onSelect, onEditTimes, onEditText, onDelete, onInsert } = props;
+  const { cues, selectedId, playhead, onSelect, onEditTimes, onEditText, onDelete, onInsert, onSplit } = props;
 
   return (
     <div className="cue-table">
@@ -39,6 +40,7 @@ export default function CueTable(props: CueTableProps) {
               onEditText={(t) => onEditText(cue.id, t)}
               onDelete={() => onDelete(cue.id)}
               onInsertAfter={() => onInsert(cue.id)}
+              onSplit={() => onSplit(cue.id)}
             />
           );
         })}
@@ -56,6 +58,7 @@ function CueRow({
   onEditText,
   onDelete,
   onInsertAfter,
+  onSplit,
 }: {
   cue: Cue;
   active: boolean;
@@ -65,6 +68,7 @@ function CueRow({
   onEditText: (t: string) => void;
   onDelete: () => void;
   onInsertAfter: () => void;
+  onSplit: () => void;
 }) {
   const [startStr, setStartStr] = useState(formatTimestamp(cue.start));
   const [endStr, setEndStr] = useState(formatTimestamp(cue.end));
@@ -127,6 +131,16 @@ function CueRow({
       />
       {error && <div className="cue-row-error">{error}</div>}
       <div className="cue-row-actions">
+        <button
+          className="btn tiny"
+          title="按切点拆分为两段"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSplit();
+          }}
+        >
+          ✂
+        </button>
         <button
           className="btn tiny"
           title="在其后插入"
